@@ -15,7 +15,9 @@ const RegID = enum {
     // EFLAG will have each bits in it as a flag to each for a different things
     // 10 ^ 0 >> is for OF (overflow)
     // 10 ^ 1 >> is for CF (carry flag)
-    // 10 ^ 2 >> is for NG (negative) <<= this mainly used for CMP with JNE
+    // 10 ^ 2 >> is for ZF (zero flag) <<= this mainly used for CMP with JE
+    // 10 ^ 3 >> is for NG (negative) <<= this mainly used for CMP with JNE
+    // 10 ^ 4 >> is for compariso flag
     // the rest i haven't think of yet
     EFLAG, // A NOTE: EFLAG is a flag register to determine 0 and negative for addition and comparison
 };
@@ -26,7 +28,7 @@ const State = enum {
 };
 
 var state: State = .FETCH;
-var R = std.enums.EnumArray(RegID, u16).initUndefined();
+var R = std.enums.EnumArray(RegID, u16).initFill(0x00);
 
 var ram: [4096]u16 = undefined;
 var clock_pulse: u8 = 1;
@@ -41,6 +43,7 @@ const instructions = blk: {
     arr[1] = jmp;
     arr[2] = lda;
     arr[3] = mov;
+    arr[4] = cmp;
     arr[14] = add;
     arr[15] = nop;
 
@@ -175,7 +178,20 @@ fn mov(tick: u8) void {
 fn add(tick: u8) void {
     _ = tick;
     const src: u16 = (R.get(.MBR) & 0x00FF);
-    const raw_idx: u4 = @truncate(((R.get(.MBR) & 0x0F00) >> 12));
+    const raw_idx: u4 = @truncate(((R.get(.MBR) & 0x0F00) >> 8));
+
+    const dest: RegID = @enumFromInt(raw_idx);
+    alu(src, dest);
+
+    R.set(.MAR, R.get(.PC));
+    state = .FETCH;
+}
+
+fn cmp(tick: u8) void {
+    _ = tick;
+    R.set(.EFLAG, (R.get(.EFLAG) ^ 0b0000_0000_0000_0100));
+    const src: u16 = (R.get(.MBR) & 0x00FF);
+    const raw_idx: u4 = @truncate(((R.get(.MBR) & 0x0F00) >> 8));
 
     const dest: RegID = @enumFromInt(raw_idx);
     alu(src, dest);
@@ -185,17 +201,31 @@ fn add(tick: u8) void {
 }
 
 // emulate hardwares
-// don't you dare to use any math operator here
+
 fn alu(src: u16, dest: RegID) void {
     var b = src;
-    while (b != 0) {
-        const sum: u16 = R.get(dest) ^ b;
-        const carry: u16 = (R.get(dest) & b) << 1;
+    var a = R.get(dest);
+    var sum: u16 = 0;
 
-        R.set(dest, sum);
+    var carry: u16 = 0;
+    while (b != 0) {
+        sum = a ^ b;
+
+        // WARNING: this thing does not substract like human
+        if (@as(u1, @truncate(((R.get(.EFLAG) & 0b0000_0000_0000_0100) >> 2))) != 0) {
+            carry = (a & b) >> 1;
+        } else {
+            carry = (a & b) << 1;
+        }
+        a = sum;
         b = carry;
     }
-    R.getPtr(.EFLAG).* ^= @as(u16, @intFromBool((R.get(dest) & 0xFF00) != 0));
+    R.set(dest, sum);
+    // var flags = if (sum == 0) 0x0002;
+    if (@as(u1, @truncate(((R.get(.EFLAG) & 0b0000_0000_0000_1000) >> 3))) != 0) {} else R.set(dest, sum);
+    // WARNING: overflow flag will somehow dissapear after 1 cycle
+    // set overflow flag
+    R.set(.EFLAG, (R.get(.EFLAG) ^ @intFromBool((R.get(dest) & 0xFF00) != 0)));
 }
 
 fn dumpRegisters(stdout: *std.Io.Writer) void {
@@ -222,6 +252,6 @@ fn run(io: std.Io) void {
         cycle();
         dumpRegisters(stdout);
         stdout.flush() catch |err| std.log.err("{any}\n", .{err});
-        std.Io.sleep(io, std.Io.Duration.fromSeconds(1), std.Io.Clock.real) catch |err| std.log.err("{any}\n", .{err});
+        // std.Io.sleep(io, std.Io.Duration.fromSeconds(1), std.Io.Clock.real) catch |err| std.log.err("{any}\n", .{err});
     }
 }
