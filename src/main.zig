@@ -41,9 +41,11 @@ const instructions = blk: {
 
     arr[0] = hlt;
     arr[1] = jmp;
-    arr[2] = lda;
-    arr[3] = mov;
-    arr[4] = cmp;
+    arr[2] = je;
+    arr[3] = jne;
+    arr[4] = lda;
+    arr[5] = mov;
+    arr[6] = cmp;
     arr[14] = add;
     arr[15] = nop;
 
@@ -189,13 +191,34 @@ fn add(tick: u8) void {
 
 fn cmp(tick: u8) void {
     _ = tick;
-    R.set(.EFLAG, (R.get(.EFLAG) ^ 0b0000_0000_0000_0100));
+    R.set(.EFLAG, (R.get(.EFLAG) ^ 0b0000_0000_0000_1100));
     const src: u16 = (R.get(.MBR) & 0x00FF);
     const raw_idx: u4 = @truncate(((R.get(.MBR) & 0x0F00) >> 8));
 
     const dest: RegID = @enumFromInt(raw_idx);
     alu(src, dest);
 
+    R.set(.MAR, R.get(.PC));
+    state = .FETCH;
+}
+
+/// this will consume all flag
+fn je(tick: u8) void {
+    _ = tick;
+    if (@as(u1, @truncate(((R.get(.EFLAG) & 0x0002) >> 1))) != 0) {
+        R.set(.PC, (R.get(.MBR) & 0x0FFF));
+        R.set(.EFLAG, (R.get(.EFLAG) ^ R.get(.EFLAG)));
+    }
+    R.set(.MAR, R.get(.PC));
+    state = .FETCH;
+}
+
+fn jne(tick: u8) void {
+    _ = tick;
+    if (@as(u1, @truncate(((R.get(.EFLAG) & 0x0002) >> 1))) == 0) {
+        R.set(.PC, (R.get(.MBR) & 0x0FFF));
+        R.set(.EFLAG, (R.get(.EFLAG) ^ R.get(.EFLAG)));
+    }
     R.set(.MAR, R.get(.PC));
     state = .FETCH;
 }
@@ -211,21 +234,23 @@ fn alu(src: u16, dest: RegID) void {
     while (b != 0) {
         sum = a ^ b;
 
-        // WARNING: this thing does not substract like human
-        if (@as(u1, @truncate(((R.get(.EFLAG) & 0b0000_0000_0000_0100) >> 2))) != 0) {
-            carry = (a & b) >> 1;
-        } else {
+        if (@as(u1, @truncate(((R.get(.EFLAG) & 0b0000_0000_0000_0100) >> 2))) != 0) {} else {
             carry = (a & b) << 1;
         }
         a = sum;
         b = carry;
+
+        // std.debug.print("sum: {d}\ncarry: {d}\n", .{ sum, carry });
+        if (a > ~@as(u8, 0) - 1) {
+            R.set(.EFLAG, (R.get(.EFLAG) ^ (@intFromBool((R.get(dest) & 0xFF00) != 0))));
+            break;
+        }
     }
-    R.set(dest, sum);
-    // var flags = if (sum == 0) 0x0002;
+    var flags: u16 = 0;
+    if (sum == 0) flags ^= 0x0002;
+
     if (@as(u1, @truncate(((R.get(.EFLAG) & 0b0000_0000_0000_1000) >> 3))) != 0) {} else R.set(dest, sum);
-    // WARNING: overflow flag will somehow dissapear after 1 cycle
-    // set overflow flag
-    R.set(.EFLAG, (R.get(.EFLAG) ^ @intFromBool((R.get(dest) & 0xFF00) != 0)));
+    R.set(.EFLAG, (R.get(.EFLAG) ^ flags));
 }
 
 fn dumpRegisters(stdout: *std.Io.Writer) void {
