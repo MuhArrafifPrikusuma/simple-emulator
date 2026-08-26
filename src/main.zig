@@ -12,7 +12,12 @@ const RegID = enum {
     PC, // 7
     SR, // 8
     Z, // 9
-    FG, // A NOTE: FG is a 1 bit flag register to determine 0 and negative for addition and comparison
+    // EFLAG will have each bits in it as a flag to each for a different things
+    // 10 ^ 0 >> is for OF (overflow)
+    // 10 ^ 1 >> is for CF (carry flag)
+    // 10 ^ 2 >> is for NG (negative) <<= this mainly used for CMP with JNE
+    // the rest i haven't think of yet
+    EFLAG, // A NOTE: EFLAG is a flag register to determine 0 and negative for addition and comparison
 };
 const State = enum {
     FETCH,
@@ -26,6 +31,7 @@ var R = std.enums.EnumArray(RegID, u16).initUndefined();
 var ram: [4096]u16 = undefined;
 var clock_pulse: u8 = 1;
 var current_ins: u8 = undefined;
+var halted: bool = false;
 
 const Instructions = *const fn (u8) void;
 const instructions = blk: {
@@ -35,6 +41,7 @@ const instructions = blk: {
     arr[1] = jmp;
     arr[2] = lda;
     arr[3] = mov;
+    arr[14] = add;
     arr[15] = nop;
 
     break :blk arr;
@@ -127,6 +134,7 @@ fn nop(tick: u8) void {
 // NOTE: if i add interupt make sure to modify this
 fn hlt(tick: u8) void {
     _ = tick;
+    halted = true;
     R.set(.MAR, R.get(.PC));
 }
 
@@ -162,18 +170,43 @@ fn mov(tick: u8) void {
     state = .FETCH;
 }
 
-// emulate hardwares
+/// you need to add to a register with A << VAL because im to stupid to implement register
+/// to register ADD
+fn add(tick: u8) void {
+    _ = tick;
+    const src: u16 = (R.get(.MBR) & 0x00FF);
+    const raw_idx: u4 = @truncate(((R.get(.MBR) & 0x0F00) >> 12));
 
-fn alu() !void {}
+    const dest: RegID = @enumFromInt(raw_idx);
+    alu(src, dest);
+
+    R.set(.MAR, R.get(.PC));
+    state = .FETCH;
+}
+
+// emulate hardwares
+// don't you dare to use any math operator here
+fn alu(src: u16, dest: RegID) void {
+    var b = src;
+    while (b != 0) {
+        const sum: u16 = R.get(dest) ^ b;
+        const carry: u16 = (R.get(dest) & b) << 1;
+
+        R.set(dest, sum);
+        b = carry;
+    }
+    R.getPtr(.EFLAG).* ^= @as(u16, @intFromBool((R.get(dest) & 0xFF00) != 0));
+}
 
 fn dumpRegisters(stdout: *std.Io.Writer) void {
-    stdout.print("PC: 0x{X:0>4}, IR: 0x{X:0>4}, MAR: 0x{X:0>4}, MBR: 0x{X:0>4}, A: 0x{X:0>4}, Z: 0x{X:0>4}\n", .{
+    stdout.print("PC: 0x{X:0>4}, IR: 0x{X:0>4}, MAR: 0x{X:0>4}, MBR: 0x{X:0>4}, A: 0x{X:0>4}, Z: 0x{X:0>4}, EFLAG: 0x{X:0>4}\n", .{
         R.get(.PC),
         R.get(.IR),
         R.get(.MAR),
         R.get(.MBR),
         R.get(.A),
         R.get(.Z),
+        R.get(.EFLAG),
     }) catch |err| std.log.err("{any}\n", .{err});
 }
 
@@ -185,9 +218,10 @@ fn run(io: std.Io) void {
     const stdout = &writer.interface;
 
     while (true) {
+        if (halted) continue;
         cycle();
         dumpRegisters(stdout);
-        std.Io.sleep(io, std.Io.Duration.fromSeconds(1), std.Io.Clock.real) catch |err| std.log.err("{any}\n", .{err});
         stdout.flush() catch |err| std.log.err("{any}\n", .{err});
+        std.Io.sleep(io, std.Io.Duration.fromSeconds(1), std.Io.Clock.real) catch |err| std.log.err("{any}\n", .{err});
     }
 }
