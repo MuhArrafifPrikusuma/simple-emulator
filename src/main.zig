@@ -2,16 +2,17 @@ const std = @import("std");
 const Io = std.Io;
 
 const RegID = enum {
-    A,
-    DIN,
-    DOUT,
-    DSL,
-    IR,
-    MAR,
-    MBR,
-    PC,
-    SR,
-    Z,
+    A, // 0
+    DIN, // 1
+    DOUT, // 2
+    DSL, // 3
+    IR, // 4
+    MAR, // 5
+    MBR, // 6
+    PC, // 7
+    SR, // 8
+    Z, // 9
+    FG, // A NOTE: FG is a 1 bit flag register to determine 0 and negative for addition and comparison
 };
 const State = enum {
     FETCH,
@@ -31,9 +32,10 @@ const instructions = blk: {
     var arr = [_]Instructions{nop} ** 16;
 
     arr[0] = hlt;
-    arr[15] = nop;
     arr[1] = jmp;
     arr[2] = lda;
+    arr[3] = mov;
+    arr[15] = nop;
 
     break :blk arr;
 };
@@ -135,19 +137,29 @@ fn jmp(tick: u8) void {
     state = .FETCH;
 }
 
+/// Value to register only with A << B
 fn lda(tick: u8) void {
     _ = tick;
     const raw_idx: u4 = @truncate((R.get(.MBR) & 0x0F00) >> 8);
-    const register_idx: RegID = @enumFromInt(raw_idx);
+    const dest: RegID = @enumFromInt(raw_idx);
 
-    const dest: RegID = @enumFromInt(R.get(register_idx));
     R.set(dest, @as(u16, (R.get(.MBR) & 0x00FF)));
+    R.set(.MAR, R.get(.PC));
+    state = .FETCH;
 }
 
-// fn sta(tick: u8) void {}
+/// register to register only and use the 12-4 bits for register id with A << B
 fn mov(tick: u8) void {
     _ = tick;
-    // const dest = (cpu.MBR & 0x0F00);
+    const low_raw_idx: u4 = @truncate((R.get(.MBR) & 0x00F0) >> 4);
+    const high_raw_idx: u4 = @truncate((R.get(.MBR) & 0x0F00) >> 8);
+
+    const src: RegID = @enumFromInt(low_raw_idx);
+    const dest: RegID = @enumFromInt(high_raw_idx);
+
+    R.set(dest, R.get(src));
+    R.set(.MAR, R.get(.PC));
+    state = .FETCH;
 }
 
 // emulate hardwares
@@ -155,12 +167,13 @@ fn mov(tick: u8) void {
 fn alu() !void {}
 
 fn dumpRegisters(stdout: *std.Io.Writer) void {
-    stdout.print("PC: 0x{X:0>4}, IR: 0x{X:0>4}, MAR: 0x{X:0>4}, MBR: 0x{X:0>4}, A: 0x{X:0>4}\n", .{
+    stdout.print("PC: 0x{X:0>4}, IR: 0x{X:0>4}, MAR: 0x{X:0>4}, MBR: 0x{X:0>4}, A: 0x{X:0>4}, Z: 0x{X:0>4}\n", .{
         R.get(.PC),
         R.get(.IR),
         R.get(.MAR),
         R.get(.MBR),
         R.get(.A),
+        R.get(.Z),
     }) catch |err| std.log.err("{any}\n", .{err});
 }
 
