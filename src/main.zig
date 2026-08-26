@@ -2,16 +2,28 @@ const std = @import("std");
 const Io = std.Io;
 
 const Registers = struct {
-    A: u16 = undefined,
+    A: u16 = 0x00,
     DIN: u16 = undefined,
     DOUT: u16 = undefined,
     DSL: u16 = undefined,
     IR: u16 = 0x00,
     MAR: usize = 0x00,
     MBR: u16 = 0x00,
-    PC: u16,
+    PC: u16 = 0x00,
     SR: u16 = undefined,
     Z: u16 = undefined,
+};
+const RegID = enum {
+    A,
+    DIN,
+    DOUT,
+    DSL,
+    IR,
+    MAR,
+    MBR,
+    PC,
+    SR,
+    Z,
 };
 const State = enum {
     FETCH,
@@ -20,8 +32,8 @@ const State = enum {
 };
 
 var state: State = .FETCH;
-var cpu: Registers = .{ .PC = 0x00 };
-var ram: [4096]u16 = undefined;
+var cpu: Registers = .{};
+var ram: [65536]u16 = undefined;
 var clock_pulse: u8 = 1;
 var current_ins: u8 = undefined;
 
@@ -31,6 +43,8 @@ const instructions = blk: {
 
     arr[0] = hlt;
     arr[15] = nop;
+    arr[1] = jmp;
+    arr[2] = mov;
 
     break :blk arr;
 };
@@ -90,59 +104,87 @@ fn cycle() void {
 fn processTick(tick: u8) void {
     switch (state) {
         .FETCH => {
-            switch (tick) {
-                // NOTE: later use 1 to determine what state it is
-                1 => cpu.PC += 1,
-                2 => cpu.MBR = 0x00,
-                3 => {
-                    cpu.MBR = ram[cpu.MAR];
-                    cpu.IR = cpu.MBR;
-                    state = .DECODE;
-                },
-
-                else => {},
+            // NOTE: later use 1 to determine what state it is
+            cpu.MBR = 0x00;
+            cpu.MBR = ram[cpu.MAR];
+            cpu.IR = cpu.MBR;
+            if (tick == 2) {
+                state = .DECODE;
+                cpu.PC += 1;
             }
         },
-        .DECODE => {
+        .DECODE => { // decoding only takes 1 tick
             if (cpu.PC == ~@as(u16, 0) - 1) cpu.PC = 0x00;
             current_ins = getInstruction();
-            clock_pulse = 1;
         },
-        .EXECUTE => {
+        .EXECUTE => { // this takes 2 ticks
             instructions[current_ins](tick);
         },
     }
 }
 
+fn getRegisterContent(addr: RegID) void {
+    switch (addr) {}
+}
+
 fn getInstruction() u8 {
     state = .EXECUTE;
-    return @as(u8, @intCast(((cpu.IR & 0xF000) >> 12)));
+    return @as(u8, @intCast((cpu.IR & 0xF000) >> 12));
 }
 
 // Instructions
 
 fn nop(tick: u8) void {
-    if (tick == 3) {
-        cpu.MAR = cpu.PC;
-        state = .FETCH;
-    }
+    _ = tick;
+    cpu.MAR = cpu.PC;
+    state = .FETCH;
 }
 // NOTE: if i add interupt make sure to modify this
 fn hlt(tick: u8) void {
     _ = tick;
+    cpu.MAR = cpu.PC;
 }
 
-fn dumpRegisters() void {
-    std.log.debug("PC: 0x{X:0>4}, IR: 0x{X:0>4}, MAR: 0x{X:0>4}, MBR: 0x{x:0>4}", .{ cpu.PC, cpu.IR, cpu.MAR, cpu.MBR });
+fn jmp(tick: u8) void {
+    _ = tick;
+    cpu.PC = (cpu.MBR & 0x0FFF);
+    cpu.MAR = cpu.PC;
+    state = .FETCH;
+}
+
+fn mov(tick: u8) void {
+    switch (tick) {
+        1 => {
+            // cpu.
+        },
+        else => unreachable,
+    }
+}
+
+// emulate hardwares
+
+fn alu() !void {}
+
+fn dumpRegisters(stdout: *std.Io.Writer) void {
+    stdout.print("PC: 0x{X:0>4}, IR: 0x{X:0>4}, MAR: 0x{X:0>4}, MBR: 0x{X:0>4}\n", .{
+        cpu.PC,
+        cpu.IR,
+        cpu.MAR,
+        cpu.MBR,
+    }) catch |err| std.log.err("{any}\n", .{err});
 }
 
 fn run(io: std.Io) void {
     @memset(&ram, 0x00);
     @memmove(ram[0..codes.len], codes);
+    var buf: [1024]u8 = undefined;
+    var writer = std.Io.File.stdout().writer(io, &buf);
+    const stdout = &writer.interface;
 
     while (true) {
         cycle();
-        dumpRegisters();
+        dumpRegisters(stdout);
         std.Io.sleep(io, std.Io.Duration.fromSeconds(1), std.Io.Clock.real) catch |err| std.log.err("{any}\n", .{err});
+        stdout.flush() catch |err| std.log.err("{any}\n", .{err});
     }
 }
