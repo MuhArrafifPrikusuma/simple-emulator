@@ -21,6 +21,23 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    if (optimize != .Debug) {
+        exe.root_module.strip = true;
+        exe.root_module.unwind_tables = .none;
+
+        if (optimize == .ReleaseFast or optimize == .ReleaseSmall) {
+            exe.lto = .full;
+            exe.link_gc_sections = true;
+
+            exe.root_module.stack_check = false;
+            exe.root_module.valgrind = false;
+            exe.discard_local_symbols = true;
+
+            exe.lto = .full;
+            exe.dead_strip_dylibs = true;
+        }
+    }
+
     b.installArtifact(exe);
 
     const run_step = b.step("run", "Run the app");
